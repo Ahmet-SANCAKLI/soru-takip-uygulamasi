@@ -1,2 +1,0 @@
-soru-takip-uygulamasi-2025
-supabase database şifresi
