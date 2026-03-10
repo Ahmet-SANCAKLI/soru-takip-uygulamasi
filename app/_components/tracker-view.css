@@ -214,8 +214,16 @@ button:disabled {
 
 .family-actions-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
+}
+
+.family-actions-grid button:last-child {
+  background: #0f172a;
+}
+
+.family-actions-grid button:last-child:hover {
+  background: #020617;
 }
 
 .danger-button {
