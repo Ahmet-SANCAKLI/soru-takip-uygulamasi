@@ -450,16 +450,6 @@ export default function TrackerView(props: Props) {
           <>
             <section className="family-grid">
               <article
-                className={`panel family-card ${selectedFamilyStudent === "Bahar" ? "family-card-active" : ""}`}
-                onClick={() => setSelectedFamilyStudent("Bahar")}
-              >
-                <h2>Bahar</h2>
-                <p>Günlük toplam: {sumByDate(baharEntries, currentDate)}</p>
-                <p>Haftalık toplam: {sumByWeek(baharEntries, currentDate)}</p>
-                <p>Aylık toplam: {sumByMonth(baharEntries, currentDate)}</p>
-              </article>
-
-              <article
                 className={`panel family-card ${selectedFamilyStudent === "Leyla" ? "family-card-active" : ""}`}
                 onClick={() => setSelectedFamilyStudent("Leyla")}
               >
@@ -468,10 +458,39 @@ export default function TrackerView(props: Props) {
                 <p>Haftalık toplam: {sumByWeek(leylaEntries, currentDate)}</p>
                 <p>Aylık toplam: {sumByMonth(leylaEntries, currentDate)}</p>
               </article>
+
+              <article
+                className={`panel family-card ${selectedFamilyStudent === "Bahar" ? "family-card-active" : ""}`}
+                onClick={() => setSelectedFamilyStudent("Bahar")}
+              >
+                <h2>Bahar</h2>
+                <p>Günlük toplam: {sumByDate(baharEntries, currentDate)}</p>
+                <p>Haftalık toplam: {sumByWeek(baharEntries, currentDate)}</p>
+                <p>Aylık toplam: {sumByMonth(baharEntries, currentDate)}</p>
+              </article>
             </section>
 
             {selectedFamilyStudent ? (
               <>
+                <section className="panel lesson-table-panel">
+                  <h2>{selectedFamilyStudent} Ders Dağılımı</h2>
+                  <div className="lesson-table">
+                    <div className="lesson-table-head">Ders</div>
+                    <div className="lesson-table-head">Günlük</div>
+                    <div className="lesson-table-head">Haftalık</div>
+                    <div className="lesson-table-head">Aylık</div>
+
+                    {lessonRows.map((row) => (
+                      <div className="lesson-row" key={row.lesson}>
+                        <span>{row.lesson}</span>
+                        <strong>{row.daily}</strong>
+                        <strong>{row.weekly}</strong>
+                        <strong>{row.monthly}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
                 <section className="panel family-actions-panel">
                   <h2>{selectedFamilyStudent} İşlemleri</h2>
                   <div className="family-actions-grid">
@@ -528,25 +547,6 @@ export default function TrackerView(props: Props) {
                     >
                       Düzelt
                     </button>
-                  </div>
-                </section>
-
-                <section className="panel lesson-table-panel">
-                  <h2>{selectedFamilyStudent} Ders Dağılımı</h2>
-                  <div className="lesson-table">
-                    <div className="lesson-table-head">Ders</div>
-                    <div className="lesson-table-head">Günlük</div>
-                    <div className="lesson-table-head">Haftalık</div>
-                    <div className="lesson-table-head">Aylık</div>
-
-                    {lessonRows.map((row) => (
-                      <div className="lesson-row" key={row.lesson}>
-                        <span>{row.lesson}</span>
-                        <strong>{row.daily}</strong>
-                        <strong>{row.weekly}</strong>
-                        <strong>{row.monthly}</strong>
-                      </div>
-                    ))}
                   </div>
                 </section>
 

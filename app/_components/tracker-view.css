@@ -179,7 +179,7 @@ button:disabled {
 .family-grid {
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .family-card {
@@ -306,10 +306,6 @@ button:disabled {
   .header-link,
   .header-date {
     justify-self: center;
-  }
-
-  .family-grid {
-    grid-template-columns: 1fr;
   }
 
   .lesson-table,
