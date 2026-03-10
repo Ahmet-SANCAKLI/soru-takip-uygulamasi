@@ -1,17 +1,20 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { formatTurkishDate, getTurkeyDateISO } from "@/lib/date";
 import { supabase } from "@/lib/supabase";
 import type { QuestionEntry, Student } from "@/lib/types";
 import "./tracker-view.css";
 
 const LESSONS: Record<Student, string[]> = {
-  Bahar: ["Matematik", "Fen", "Türkçe", "İnkılap", "Din", "Paragraf"],
-  Leyla: ["Paragraf", "Problem", "Geometri", "Fizik", "Kimya", "Biyoloji"]
+  Bahar: ["Matematik", "Fen", "Türkçe", "İnkılap", "Din", "Paragraf", "İngilizce"],
+  Leyla: ["Paragraf", "Problem", "Geometri", "Fizik", "Kimya", "Biyoloji", "Matematik"]
 };
 
 const STEPS = [1, 5, 10, 20];
+const FAMILY_PASSWORD = "1234";
 
 type DraftState = {
   stepIndex: number;
@@ -30,11 +33,7 @@ type Notice = {
 };
 
 function todayISO() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return getTurkeyDateISO();
 }
 
 function weekStartISO(dateISO: string) {
@@ -51,6 +50,18 @@ function weekEndISO(dateISO: string) {
   return start.toISOString().slice(0, 10);
 }
 
+function monthStartISO(dateISO: string) {
+  const date = new Date(`${dateISO}T00:00:00`);
+  date.setDate(1);
+  return date.toISOString().slice(0, 10);
+}
+
+function monthEndISO(dateISO: string) {
+  const date = new Date(`${dateISO}T00:00:00`);
+  date.setMonth(date.getMonth() + 1, 0);
+  return date.toISOString().slice(0, 10);
+}
+
 function sumByDate(entries: QuestionEntry[], dateISO: string) {
   return entries
     .filter((entry) => entry.entry_date === dateISO)
@@ -62,6 +73,20 @@ function sumByWeek(entries: QuestionEntry[], dateISO: string) {
   const end = weekEndISO(dateISO);
   return entries
     .filter((entry) => entry.entry_date >= start && entry.entry_date <= end)
+    .reduce((total, entry) => total + entry.question_count, 0);
+}
+
+function sumByMonth(entries: QuestionEntry[], dateISO: string) {
+  const start = monthStartISO(dateISO);
+  const end = monthEndISO(dateISO);
+  return entries
+    .filter((entry) => entry.entry_date >= start && entry.entry_date <= end)
+    .reduce((total, entry) => total + entry.question_count, 0);
+}
+
+function sumLessonByDate(entries: QuestionEntry[], lesson: string, dateISO: string) {
+  return entries
+    .filter((entry) => entry.lesson === lesson && entry.entry_date === dateISO)
     .reduce((total, entry) => total + entry.question_count, 0);
 }
 
@@ -77,7 +102,39 @@ function buildInitialDrafts(): DraftMap {
   };
 }
 
+function getLessonRows(entries: QuestionEntry[], student: Student, currentDate: string) {
+  const weekStart = weekStartISO(currentDate);
+  const weekEnd = weekEndISO(currentDate);
+  const monthStart = monthStartISO(currentDate);
+  const monthEnd = monthEndISO(currentDate);
+
+  return LESSONS[student].map((lesson) => {
+    const lessonEntries = entries.filter((entry) => entry.lesson === lesson);
+
+    const daily = lessonEntries
+      .filter((entry) => entry.entry_date === currentDate)
+      .reduce((total, entry) => total + entry.question_count, 0);
+
+    const weekly = lessonEntries
+      .filter((entry) => entry.entry_date >= weekStart && entry.entry_date <= weekEnd)
+      .reduce((total, entry) => total + entry.question_count, 0);
+
+    const monthly = lessonEntries
+      .filter((entry) => entry.entry_date >= monthStart && entry.entry_date <= monthEnd)
+      .reduce((total, entry) => total + entry.question_count, 0);
+
+    return { lesson, daily, weekly, monthly };
+  });
+}
+
+function buildFamilyEditDraft(entries: QuestionEntry[], student: Student, currentDate: string) {
+  return Object.fromEntries(
+    LESSONS[student].map((lesson) => [lesson, sumLessonByDate(entries, lesson, currentDate)])
+  ) as Record<string, number>;
+}
+
 export default function TrackerView(props: Props) {
+  const router = useRouter();
   const [currentDate, setCurrentDate] = useState(todayISO());
   const [entries, setEntries] = useState<QuestionEntry[]>([]);
   const [drafts, setDrafts] = useState<DraftMap>(buildInitialDrafts());
@@ -85,6 +142,11 @@ export default function TrackerView(props: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [selectedFamilyStudent, setSelectedFamilyStudent] = useState<Student | null>(null);
+  const [familyUnlocked, setFamilyUnlocked] = useState(props.mode !== "family");
+  const [familyPassword, setFamilyPassword] = useState("");
+  const [familyEditMode, setFamilyEditMode] = useState(false);
+  const [familyEditDraft, setFamilyEditDraft] = useState<Record<string, number>>({});
 
   async function loadEntries() {
     setLoading(true);
@@ -116,6 +178,7 @@ export default function TrackerView(props: Props) {
       setCurrentDate((prev) => {
         if (prev !== nowDate) {
           setDrafts(buildInitialDrafts());
+          setFamilyEditMode(false);
           loadEntries();
           return nowDate;
         }
@@ -126,8 +189,19 @@ export default function TrackerView(props: Props) {
     return () => clearInterval(timer);
   }, []);
 
-  const baharEntries = useMemo(() => entries.filter((entry) => entry.student === "Bahar"), [entries]);
-  const leylaEntries = useMemo(() => entries.filter((entry) => entry.student === "Leyla"), [entries]);
+  useEffect(() => {
+    if (props.mode !== "family") {
+      return;
+    }
+
+    const access = window.sessionStorage.getItem("family-access");
+    setFamilyUnlocked(access === "granted");
+  }, [props.mode]);
+
+  useEffect(() => {
+    setFamilyEditMode(false);
+    setFamilyEditDraft({});
+  }, [selectedFamilyStudent, currentDate]);
 
   function cycleStep(student: Student) {
     setDrafts((prev) => ({
@@ -142,6 +216,7 @@ export default function TrackerView(props: Props) {
   function increaseLesson(student: Student, lesson: string) {
     setDrafts((prev) => {
       const step = STEPS[prev[student].stepIndex];
+
       return {
         ...prev,
         [student]: {
@@ -160,7 +235,7 @@ export default function TrackerView(props: Props) {
       ...prev,
       [student]: buildDraft(student)
     }));
-    setNotice({ type: "error", text: "Kayıt Yapılmadı." });
+    setNotice({ type: "error", text: "Kayıt yapılmadı." });
   }
 
   async function saveDraft(student: Student) {
@@ -176,7 +251,7 @@ export default function TrackerView(props: Props) {
 
     if (records.length === 0) {
       setError("Kaydetmek için önce derslere basarak sayı girin.");
-      setNotice({ type: "error", text: "Kayıt Yapılmadı." });
+      setNotice({ type: "error", text: "Kayıt yapılmadı." });
       return;
     }
 
@@ -187,21 +262,21 @@ export default function TrackerView(props: Props) {
 
     if (insertError) {
       setError("Kayıt kaydedilemedi.");
-      setNotice({ type: "error", text: "Kayıt Yapılamadı." });
+      setNotice({ type: "error", text: "Kayıt yapılamadı." });
       setSaving(false);
       return;
     }
 
-    clearDraft(student);
+    setDrafts((prev) => ({
+      ...prev,
+      [student]: buildDraft(student)
+    }));
     await loadEntries();
     setSaving(false);
-    setNotice({ type: "success", text: "Kayıt Başarılı." });
+    setNotice({ type: "success", text: "Kayıt başarılı." });
   }
 
-  async function clearFamilyWeek(student: Student) {
-    const start = weekStartISO(currentDate);
-    const end = weekEndISO(currentDate);
-
+  async function clearFamilyRange(student: Student, start: string, end: string, label: string) {
     setSaving(true);
     setError(null);
     setNotice(null);
@@ -214,24 +289,157 @@ export default function TrackerView(props: Props) {
       .lte("entry_date", end);
 
     if (deleteError) {
-      setError("Haftalık kayıtlar temizlenemedi.");
-      setNotice({ type: "error", text: "Kayıt Yapılamadı." });
+      setError(`${label} kayıtları temizlenemedi.`);
+      setNotice({ type: "error", text: "Kayıt silinemedi." });
       setSaving(false);
       return;
     }
 
+    setFamilyEditMode(false);
     await loadEntries();
     setSaving(false);
-    setNotice({ type: "success", text: `${student} haftalık kayıtları temizlendi.` });
+    setNotice({ type: "success", text: `${student} için ${label.toLowerCase()} kayıtları temizlendi.` });
+  }
+
+  async function clearFamilyAll(student: Student) {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+
+    const { error: deleteError } = await supabase.from("question_entries").delete().eq("student", student);
+
+    if (deleteError) {
+      setError("Tüm veriler temizlenemedi.");
+      setNotice({ type: "error", text: "Kayıt silinemedi." });
+      setSaving(false);
+      return;
+    }
+
+    setFamilyEditMode(false);
+    await loadEntries();
+    setSaving(false);
+    setNotice({ type: "success", text: `${student} için tüm veriler temizlendi.` });
+  }
+
+  function startFamilyEdit(student: Student, studentEntries: QuestionEntry[]) {
+    setFamilyEditDraft(buildFamilyEditDraft(studentEntries, student, currentDate));
+    setFamilyEditMode(true);
+    setNotice(null);
+    setError(null);
+  }
+
+  function updateFamilyEditLesson(lesson: string, value: string) {
+    const normalized = Number(value);
+    setFamilyEditDraft((prev) => ({
+      ...prev,
+      [lesson]: Number.isFinite(normalized) && normalized >= 0 ? normalized : 0
+    }));
+  }
+
+  async function saveFamilyEdit(student: Student) {
+    const records = Object.entries(familyEditDraft)
+      .filter(([, value]) => value > 0)
+      .map(([lesson, value]) => ({
+        student,
+        lesson,
+        question_count: value,
+        entry_date: currentDate
+      }));
+
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+
+    const { error: deleteError } = await supabase
+      .from("question_entries")
+      .delete()
+      .eq("student", student)
+      .eq("entry_date", currentDate);
+
+    if (deleteError) {
+      setError("Eski günlük kayıtlar silinemedi.");
+      setNotice({ type: "error", text: "Düzeltme kaydedilemedi." });
+      setSaving(false);
+      return;
+    }
+
+    if (records.length > 0) {
+      const { error: insertError } = await supabase.from("question_entries").insert(records);
+
+      if (insertError) {
+        setError("Düzeltilen kayıtlar kaydedilemedi.");
+        setNotice({ type: "error", text: "Düzeltme kaydedilemedi." });
+        setSaving(false);
+        return;
+      }
+    }
+
+    setFamilyEditMode(false);
+    await loadEntries();
+    setSaving(false);
+    setNotice({ type: "success", text: `${student} günlük kayıtları düzeltildi.` });
+  }
+
+  function unlockFamily(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (familyPassword !== FAMILY_PASSWORD) {
+      setNotice({ type: "error", text: "Şifre yanlış." });
+      return;
+    }
+
+    window.sessionStorage.setItem("family-access", "granted");
+    setFamilyUnlocked(true);
+    setFamilyPassword("");
+    setNotice(null);
   }
 
   if (props.mode === "family") {
+    const baharEntries = entries.filter((entry) => entry.student === "Bahar");
+    const leylaEntries = entries.filter((entry) => entry.student === "Leyla");
+    const activeEntries =
+      selectedFamilyStudent === "Bahar" ? baharEntries : selectedFamilyStudent === "Leyla" ? leylaEntries : [];
+    const lessonRows = selectedFamilyStudent ? getLessonRows(activeEntries, selectedFamilyStudent, currentDate) : [];
+    const formattedDate = formatTurkishDate(currentDate);
+
+    if (!familyUnlocked) {
+      return (
+        <main className="tracker-container">
+          <header className="tracker-header tracker-header-family">
+            <Link className="header-link" href="/">
+              Ana Sayfaya Dön
+            </Link>
+            <h1>Aile Paneli</h1>
+            <span className="header-date">{formattedDate}</span>
+          </header>
+
+          <section className="panel family-lock">
+            <h2>Aile Şifresi</h2>
+            <form className="family-form" onSubmit={unlockFamily}>
+              <input
+                inputMode="numeric"
+                maxLength={4}
+                onChange={(event) => setFamilyPassword(event.target.value)}
+                placeholder="1234"
+                type="password"
+                value={familyPassword}
+              />
+              {notice ? <p className={notice.type === "success" ? "success" : "error"}>{notice.text}</p> : null}
+              <button type="submit">Giriş Yap</button>
+            </form>
+          </section>
+        </main>
+      );
+    }
+
     return (
       <main className="tracker-container">
-        <header className="tracker-header">
-          <Link href="/">Ana Sayfaya Dön</Link>
+        <header className="tracker-header tracker-header-family">
+          <Link className="header-link" href="/">
+            Ana Sayfaya Dön
+          </Link>
           <h1>Aile Paneli</h1>
-          <span>{new Date(`${currentDate}T00:00:00`).toLocaleDateString("tr-TR")}</span>
+          <span className="header-date">{formattedDate}</span>
         </header>
 
         {loading ? <p className="panel">Yükleniyor...</p> : null}
@@ -239,25 +447,139 @@ export default function TrackerView(props: Props) {
         {notice ? <p className={notice.type === "success" ? "success" : "error"}>{notice.text}</p> : null}
 
         {!loading ? (
-          <section className="family-grid">
-            <article className="panel">
-              <h2>Bahar</h2>
-              <p>Günlük toplam: {sumByDate(baharEntries, currentDate)}</p>
-              <p>Haftalık toplam: {sumByWeek(baharEntries, currentDate)}</p>
-              <button className="secondary" disabled={saving} onClick={() => clearFamilyWeek("Bahar")} type="button">
-                Temizle
-              </button>
-            </article>
+          <>
+            <section className="family-grid">
+              <article
+                className={`panel family-card ${selectedFamilyStudent === "Bahar" ? "family-card-active" : ""}`}
+                onClick={() => setSelectedFamilyStudent("Bahar")}
+              >
+                <h2>Bahar</h2>
+                <p>Günlük toplam: {sumByDate(baharEntries, currentDate)}</p>
+                <p>Haftalık toplam: {sumByWeek(baharEntries, currentDate)}</p>
+                <p>Aylık toplam: {sumByMonth(baharEntries, currentDate)}</p>
+              </article>
 
-            <article className="panel">
-              <h2>Leyla</h2>
-              <p>Günlük toplam: {sumByDate(leylaEntries, currentDate)}</p>
-              <p>Haftalık toplam: {sumByWeek(leylaEntries, currentDate)}</p>
-              <button className="secondary" disabled={saving} onClick={() => clearFamilyWeek("Leyla")} type="button">
-                Temizle
-              </button>
-            </article>
-          </section>
+              <article
+                className={`panel family-card ${selectedFamilyStudent === "Leyla" ? "family-card-active" : ""}`}
+                onClick={() => setSelectedFamilyStudent("Leyla")}
+              >
+                <h2>Leyla</h2>
+                <p>Günlük toplam: {sumByDate(leylaEntries, currentDate)}</p>
+                <p>Haftalık toplam: {sumByWeek(leylaEntries, currentDate)}</p>
+                <p>Aylık toplam: {sumByMonth(leylaEntries, currentDate)}</p>
+              </article>
+            </section>
+
+            {selectedFamilyStudent ? (
+              <>
+                <section className="panel family-actions-panel">
+                  <h2>{selectedFamilyStudent} İşlemleri</h2>
+                  <div className="family-actions-grid">
+                    <button
+                      className="secondary"
+                      disabled={saving}
+                      onClick={() => clearFamilyRange(selectedFamilyStudent, currentDate, currentDate, "Günlük")}
+                      type="button"
+                    >
+                      Günlük Temizle
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={saving}
+                      onClick={() =>
+                        clearFamilyRange(
+                          selectedFamilyStudent,
+                          weekStartISO(currentDate),
+                          weekEndISO(currentDate),
+                          "Haftalık"
+                        )
+                      }
+                      type="button"
+                    >
+                      Haftalık Temizle
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={saving}
+                      onClick={() =>
+                        clearFamilyRange(
+                          selectedFamilyStudent,
+                          monthStartISO(currentDate),
+                          monthEndISO(currentDate),
+                          "Aylık"
+                        )
+                      }
+                      type="button"
+                    >
+                      Aylık Temizle
+                    </button>
+                    <button
+                      className="secondary danger-button"
+                      disabled={saving}
+                      onClick={() => clearFamilyAll(selectedFamilyStudent)}
+                      type="button"
+                    >
+                      Tüm Veriyi Temizle
+                    </button>
+                    <button
+                      disabled={saving}
+                      onClick={() => startFamilyEdit(selectedFamilyStudent, activeEntries)}
+                      type="button"
+                    >
+                      Düzelt
+                    </button>
+                  </div>
+                </section>
+
+                <section className="panel lesson-table-panel">
+                  <h2>{selectedFamilyStudent} Ders Dağılımı</h2>
+                  <div className="lesson-table">
+                    <div className="lesson-table-head">Ders</div>
+                    <div className="lesson-table-head">Günlük</div>
+                    <div className="lesson-table-head">Haftalık</div>
+                    <div className="lesson-table-head">Aylık</div>
+
+                    {lessonRows.map((row) => (
+                      <div className="lesson-row" key={row.lesson}>
+                        <span>{row.lesson}</span>
+                        <strong>{row.daily}</strong>
+                        <strong>{row.weekly}</strong>
+                        <strong>{row.monthly}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {familyEditMode ? (
+                  <section className="panel family-edit-panel">
+                    <h2>{selectedFamilyStudent} Günlük Düzeltme</h2>
+                    <p>{formattedDate} tarihli günlük kayıtlar düzenlenir.</p>
+                    <div className="family-edit-grid">
+                      {LESSONS[selectedFamilyStudent].map((lesson) => (
+                        <label className="family-edit-field" key={lesson}>
+                          <span>{lesson}</span>
+                          <input
+                            min="0"
+                            onChange={(event) => updateFamilyEditLesson(lesson, event.target.value)}
+                            type="number"
+                            value={familyEditDraft[lesson] ?? 0}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="actions-row">
+                      <button className="secondary" onClick={() => setFamilyEditMode(false)} type="button">
+                        Vazgeç
+                      </button>
+                      <button disabled={saving} onClick={() => saveFamilyEdit(selectedFamilyStudent)} type="button">
+                        {saving ? "Kaydediliyor..." : "Düzeltmeyi Kaydet"}
+                      </button>
+                    </div>
+                  </section>
+                ) : null}
+              </>
+            ) : null}
+          </>
         ) : null}
       </main>
     );
@@ -275,12 +597,11 @@ export default function TrackerView(props: Props) {
           Ana Sayfaya Dön
         </Link>
         <h1>{student} Soru Giriş</h1>
-        <span className="header-spacer" />
       </header>
 
       <section className="panel date-panel">
         <span>Tarih</span>
-        <strong>{new Date(`${currentDate}T00:00:00`).toLocaleDateString("tr-TR")}</strong>
+        <strong>{formatTurkishDate(currentDate)}</strong>
       </section>
 
       {loading ? <p className="panel">Yükleniyor...</p> : null}
@@ -317,6 +638,9 @@ export default function TrackerView(props: Props) {
           <section className="summary panel">
             <span>Günlük toplam soru: {savedDaily}</span>
             <span>Haftalık toplam soru: {savedWeekly}</span>
+            <button className="summary-exit" onClick={() => router.push("/")} type="button">
+              Çıkış
+            </button>
           </section>
         </>
       ) : null}
